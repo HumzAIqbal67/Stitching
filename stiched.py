@@ -19,15 +19,15 @@ class VideoApp:
         self.stop_button = ttk.Button(root, text="Stop", command=self.stop)
         self.stop_button.grid(row=1, column=1, padx=10, pady=10)
 
-        self.stitched_label = ttk.Label(root)
-        self.stitched_label.grid(row=0, column=2, padx=10, pady=10, columnspan=2)
+        self.canvas_label = ttk.Label(root)
+        self.canvas_label.grid(row=0, column=2, padx=10, pady=10, columnspan=2)
 
         self.cap = cv2.VideoCapture(video_path)  # Load the recorded video
         self.running = False
         self.crop_params = crop_params  # Crop parameters: (x, y, width, height)
 
         # Parameters for Shi-Tomasi corner detection
-        self.feature_params = dict(maxCorners=500, qualityLevel=0.01, minDistance=5, blockSize=7)
+        self.feature_params = dict(maxCorners=100, qualityLevel=0.3, minDistance=5, blockSize=7)
 
         # Parameters for Lucas-Kanade optical flow
         self.lk_params = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
@@ -36,11 +36,21 @@ class VideoApp:
         self.p0 = None
         self.frame_count = 0
         self.redetect_interval = 5  # Number of frames between re-detection
+        self.plot_interval = 30  # Number of frames between plotting the image onto the canvas
 
         # Initialize the canvas
-        self.canvas_size_multiplier = 20
+        self.canvas_size_multiplier = 5  # Smaller canvas
+        self.image_scale = 0.25  # Scale the image to a fourth of the size
         self.canvas = None
         self.canvas_initialized = False
+
+        # Initial position on canvas (close to top-left, but not exactly)
+        self.initial_offset = 50
+        self.canvas_x = self.initial_offset
+        self.canvas_y = self.initial_offset
+
+        self.last_frame = None
+        self.last_direction = None
 
     def start(self):
         self.running = True
@@ -51,10 +61,13 @@ class VideoApp:
 
     def initialize_canvas(self, frame):
         height, width, _ = frame.shape
-        self.canvas_height = height * self.canvas_size_multiplier
-        self.canvas_width = width * self.canvas_size_multiplier
-        self.canvas = np.zeros((self.canvas_height, self.canvas_width, 3), dtype=np.uint8)
+        self.canvas_height = int(height * self.canvas_size_multiplier)
+        self.canvas_width = int(width * self.canvas_size_multiplier)
+        self.canvas = np.full((self.canvas_height, self.canvas_width, 3), 128, dtype=np.uint8)  # Grey background
         self.canvas_initialized = True
+
+        # Place the first frame close to the top-left of the canvas
+        self.canvas[self.canvas_y:self.canvas_y+height, self.canvas_x:self.canvas_x+width] = frame
 
     def update_frame(self):
         if self.running:
@@ -65,6 +78,8 @@ class VideoApp:
                     x, y, w, h = self.crop_params
                     frame = frame[y:y+h, x:x+w]
 
+                # Resize the frame to a fourth of its size
+                frame = cv2.resize(frame, (0, 0), fx=self.image_scale, fy=self.image_scale)
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
                 if not self.canvas_initialized:
@@ -81,8 +96,8 @@ class VideoApp:
                         good_new = p1[st == 1]
                         good_old = self.p0[st == 1]
 
+                        # Calculate movement direction
                         if len(good_new) > 0:
-                            # Calculate movement direction
                             movement = good_new - good_old
                             avg_movement = np.mean(movement, axis=0)
                             movement_magnitude = np.linalg.norm(avg_movement)
@@ -95,18 +110,29 @@ class VideoApp:
                                 if -45 <= direction_angle < 45:
                                     direction = 'Right'
                                 elif 45 <= direction_angle < 135:
-                                    direction = 'Down'
+                                    direction = 'Up'
                                 elif direction_angle >= 135 or direction_angle < -135:
                                     direction = 'Left'
                                 elif -135 <= direction_angle < -45:
-                                    direction = 'Up'
+                                    direction = 'Down'
 
-                                # Draw arrows indicating direction at the top left corner
+                                # Draw arrows indicating direction (only on video, not on canvas)
+                                for i, (new, old) in enumerate(zip(good_new, good_old)):
+                                    a, b = new.ravel()
+                                    c, d = old.ravel()
+                                    frame = cv2.arrowedLine(frame, (int(c), int(d)), (int(a), int(b)), (0, 255, 0), 2)
+
+                                # Overlay direction arrows and labels (only on video, not on canvas)
                                 frame = self.overlay_direction_arrows(frame, direction)
 
-                            self.p0 = good_new.reshape(-1, 1, 2)
+                                # Plot the frame onto the canvas periodically
+                                if self.frame_count % self.plot_interval == 0:
+                                    if self.last_frame is not None and self.last_direction is not None:
+                                        self.stitch_and_plot(frame, self.last_frame, self.last_direction)
+                                    self.last_frame = frame.copy()
+                                    self.last_direction = direction
 
-                        self.prev_gray = gray.copy()
+                        self.p0 = good_new.reshape(-1, 1, 2)
 
                 self.prev_gray = gray.copy()
                 self.frame_count += 1
@@ -118,17 +144,79 @@ class VideoApp:
                 self.video_label.imgtk = imgtk
                 self.video_label.configure(image=imgtk)
 
+                # Convert the canvas to a format Tkinter can display
+                canvas_img = Image.fromarray(self.canvas)
+                canvas_imgtk = ImageTk.PhotoImage(image=canvas_img)
+                self.canvas_label.imgtk = canvas_imgtk
+                self.canvas_label.configure(image=canvas_imgtk)
+
                 self.root.after(30, self.update_frame)  # Adjust the delay for desired frame rate
+
+    def stitch_and_plot(self, frame1, frame2, direction):
+        # Convert frames to grayscale
+        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+
+        # Detect features and compute descriptors using SIFT
+        sift = cv2.SIFT_create()
+        keypoints1, descriptors1 = sift.detectAndCompute(gray1, None)
+        keypoints2, descriptors2 = sift.detectAndCompute(gray2, None)
+
+        # Find matches between descriptors using brute force matcher
+        bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+        matches = bf.match(descriptors1, descriptors2)
+        matches = sorted(matches, key=lambda x: x.distance)
+
+        # Extract matched points
+        if len(matches) < 4:
+            return  # Not enough matches to compute homography
+
+        src_pts = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+        # Calculate homography
+        h_matrix, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC, 5.0)
+
+        # Warp the second frame to align with the first frame
+        height, width, _ = frame1.shape
+        stitched_image = cv2.warpPerspective(frame2, h_matrix, (width * 2, height * 2))
+
+        # Determine the offset based on direction
+        if direction == 'Right':
+            x_offset = self.canvas_x + width // 2
+            y_offset = self.canvas_y
+        elif direction == 'Left':
+            x_offset = self.canvas_x - width // 2
+            y_offset = self.canvas_y
+        elif direction == 'Up':
+            x_offset = self.canvas_x
+            y_offset = self.canvas_y - height // 2
+        elif direction == 'Down':
+            x_offset = self.canvas_x
+            y_offset = self.canvas_y + height // 2
+        else:
+            return
+
+        # Update canvas position
+        self.canvas_x = x_offset
+        self.canvas_y = y_offset
+
+        # Blend the stitched image into the canvas
+        canvas_height, canvas_width, _ = self.canvas.shape
+        blend_height = min(stitched_image.shape[0], canvas_height - y_offset)
+        blend_width = min(stitched_image.shape[1], canvas_width - x_offset)
+
+        self.canvas[y_offset:y_offset+blend_height, x_offset:x_offset+blend_width] = stitched_image[:blend_height, :blend_width]
 
     def overlay_direction_arrows(self, frame, active_direction):
         # Create an overlay for arrows
-        arrow_length = 50
-        thickness = 5
+        arrow_length = 10  # Smaller arrows
+        thickness = 2
         color_inactive = (0, 0, 255)
         color_active = (0, 255, 0)
         
         height, width, _ = frame.shape
-        top_left_x, top_left_y = 50, 50  # Top left corner
+        top_left_x, top_left_y = 20, 20  # Adjusted position to fully display arrows
 
         directions = {
             'Up': ((top_left_x, top_left_y), (top_left_x, top_left_y - arrow_length)),
@@ -143,14 +231,14 @@ class VideoApp:
 
         # Add text labels
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.5
-        font_thickness = 2
+        font_scale = 0.4
+        font_thickness = 1
 
         labels = {
-            'Up': (top_left_x - 20, top_left_y - arrow_length - 10),
-            'Down': (top_left_x - 30, top_left_y + arrow_length + 20),
-            'Left': (top_left_x - arrow_length - 50, top_left_y + 5),
-            'Right': (top_left_x + arrow_length + 10, top_left_y + 5)
+            'Up': (top_left_x - 10, top_left_y - arrow_length - 5),
+            'Down': (top_left_x - 10, top_left_y + arrow_length + 10),
+            'Left': (top_left_x - arrow_length - 30, top_left_y + 5),
+            'Right': (top_left_x + arrow_length + 5, top_left_y + 5)
         }
 
         for direction, (text_x, text_y) in labels.items():
