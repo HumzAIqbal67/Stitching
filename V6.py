@@ -19,15 +19,12 @@ class VideoApp:
         self.stop_button = ttk.Button(root, text="Stop", command=self.stop)
         self.stop_button.grid(row=1, column=1, padx=10, pady=10)
 
-        self.stitched_label = ttk.Label(root)
-        self.stitched_label.grid(row=0, column=2, padx=10, pady=10, columnspan=2)
-
         self.cap = cv2.VideoCapture(video_path)  # Load the recorded video
         self.running = False
         self.crop_params = crop_params  # Crop parameters: (x, y, width, height)
 
         # Parameters for Shi-Tomasi corner detection
-        self.feature_params = dict(maxCorners=500, qualityLevel=0.01, minDistance=5, blockSize=7)
+        self.feature_params = dict(maxCorners=100, qualityLevel=0.3, minDistance=5, blockSize=7)
 
         # Parameters for Lucas-Kanade optical flow
         self.lk_params = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
@@ -37,24 +34,12 @@ class VideoApp:
         self.frame_count = 0
         self.redetect_interval = 5  # Number of frames between re-detection
 
-        # Initialize the canvas
-        self.canvas_size_multiplier = 20
-        self.canvas = None
-        self.canvas_initialized = False
-
     def start(self):
         self.running = True
         self.update_frame()
 
     def stop(self):
         self.running = False
-
-    def initialize_canvas(self, frame):
-        height, width, _ = frame.shape
-        self.canvas_height = height * self.canvas_size_multiplier
-        self.canvas_width = width * self.canvas_size_multiplier
-        self.canvas = np.zeros((self.canvas_height, self.canvas_width, 3), dtype=np.uint8)
-        self.canvas_initialized = True
 
     def update_frame(self):
         if self.running:
@@ -67,9 +52,6 @@ class VideoApp:
 
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-                if not self.canvas_initialized:
-                    self.initialize_canvas(frame)
-
                 # Re-detect corners periodically or if the number of tracked corners is low
                 if self.prev_gray is None or self.frame_count % self.redetect_interval == 0 or len(self.p0) < 50:
                     self.p0 = cv2.goodFeaturesToTrack(gray, mask=None, **self.feature_params)
@@ -81,8 +63,8 @@ class VideoApp:
                         good_new = p1[st == 1]
                         good_old = self.p0[st == 1]
 
+                        # Calculate movement direction
                         if len(good_new) > 0:
-                            # Calculate movement direction
                             movement = good_new - good_old
                             avg_movement = np.mean(movement, axis=0)
                             movement_magnitude = np.linalg.norm(avg_movement)
@@ -93,20 +75,24 @@ class VideoApp:
 
                                 # Determine direction
                                 if -45 <= direction_angle < 45:
-                                    direction = 'Right'
-                                elif 45 <= direction_angle < 135:
-                                    direction = 'Down'
-                                elif direction_angle >= 135 or direction_angle < -135:
                                     direction = 'Left'
-                                elif -135 <= direction_angle < -45:
+                                elif 45 <= direction_angle < 135:
                                     direction = 'Up'
+                                elif direction_angle >= 135 or direction_angle < -135:
+                                    direction = 'Right'
+                                elif -135 <= direction_angle < -45:
+                                    direction = 'Down'
 
-                                # Draw arrows indicating direction at the top left corner
-                                frame = self.overlay_direction_arrows(frame, direction)
+                                # Draw arrows indicating direction
+                                for i, (new, old) in enumerate(zip(good_new, good_old)):
+                                    a, b = new.ravel()
+                                    c, d = old.ravel()
+                                    frame = cv2.arrowedLine(frame, (int(c), int(d)), (int(a), int(b)), (0, 255, 0), 2)
 
-                            self.p0 = good_new.reshape(-1, 1, 2)
+                            # Overlay direction arrows and labels
+                            frame = self.overlay_direction_arrows(frame, direction)
 
-                        self.prev_gray = gray.copy()
+                        self.p0 = good_new.reshape(-1, 1, 2)
 
                 self.prev_gray = gray.copy()
                 self.frame_count += 1
@@ -128,13 +114,13 @@ class VideoApp:
         color_active = (0, 255, 0)
         
         height, width, _ = frame.shape
-        top_left_x, top_left_y = 50, 50  # Top left corner
+        center_x, center_y = width // 2, height // 2
 
         directions = {
-            'Up': ((top_left_x, top_left_y), (top_left_x, top_left_y - arrow_length)),
-            'Down': ((top_left_x, top_left_y), (top_left_x, top_left_y + arrow_length)),
-            'Left': ((top_left_x, top_left_y), (top_left_x - arrow_length, top_left_y)),
-            'Right': ((top_left_x, top_left_y), (top_left_x + arrow_length, top_left_y))
+            'Up': ((center_x, center_y), (center_x, center_y - arrow_length)),
+            'Down': ((center_x, center_y), (center_x, center_y + arrow_length)),
+            'Left': ((center_x, center_y), (center_x - arrow_length, center_y)),
+            'Right': ((center_x, center_y), (center_x + arrow_length, center_y))
         }
 
         for direction, ((x1, y1), (x2, y2)) in directions.items():
@@ -147,10 +133,10 @@ class VideoApp:
         font_thickness = 2
 
         labels = {
-            'Up': (top_left_x - 20, top_left_y - arrow_length - 10),
-            'Down': (top_left_x - 30, top_left_y + arrow_length + 20),
-            'Left': (top_left_x - arrow_length - 50, top_left_y + 5),
-            'Right': (top_left_x + arrow_length + 10, top_left_y + 5)
+            'Up': (center_x - 20, center_y - arrow_length - 10),
+            'Down': (center_x - 30, center_y + arrow_length + 20),
+            'Left': (center_x - arrow_length - 50, center_y + 5),
+            'Right': (center_x + arrow_length + 10, center_y + 5)
         }
 
         for direction, (text_x, text_y) in labels.items():
