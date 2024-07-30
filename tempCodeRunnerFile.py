@@ -1,1 +1,1 @@
-stitched_image
+10
