@@ -28,7 +28,7 @@ class CameraSettingsApp:
             self.root.quit()
 
         # Create sliders and entries for exposure, exposure time, and gain
-        self.exposure_slider = tk.Scale(self.frame_left, from_=-13, to_=0, orient=tk.HORIZONTAL, label="Exposure", command=self.update_exposure)
+        self.exposure_slider = tk.Scale(self.frame_left, from_=-10, to_=10, orient=tk.HORIZONTAL, label="Exposure (EV units)", command=self.update_exposure)
         self.exposure_slider.pack(pady=10)
 
         self.exposure_time_label = tk.Label(self.frame_left, text="Exposure Time (ms)")
@@ -84,7 +84,10 @@ class CameraSettingsApp:
         value = self.exposure_time_entry.get()
         try:
             exposure_time = float(value)
-            self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure_time / 1000)  # Assuming the entry is in milliseconds
+            if 1 <= exposure_time <= 1000:
+                self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure_time / 1000)  # Assuming the entry is in milliseconds
+            else:
+                print("Exposure time out of range (1-1000 ms)")
         except ValueError:
             print("Invalid exposure time value")
 
@@ -92,7 +95,10 @@ class CameraSettingsApp:
         value = self.gain_entry.get()
         try:
             gain = float(value)
-            self.cap.set(cv2.CAP_PROP_GAIN, gain)
+            if 0 <= gain <= 255:
+                self.cap.set(cv2.CAP_PROP_GAIN, gain)
+            else:
+                print("Gain out of range (0-255)")
         except ValueError:
             print("Invalid gain value")
 
@@ -106,4 +112,5 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = CameraSettingsApp(root)
     root.mainloop()
+
 
