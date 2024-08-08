@@ -2,6 +2,7 @@ import cv2
 import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
+import time
 
 class CameraSettingsApp:
     def __init__(self, root):
@@ -16,23 +17,35 @@ class CameraSettingsApp:
         self.video_label = tk.Label(self.frame_left)
         self.video_label.pack()
 
+        # Create a label to display the FPS
+        self.fps_label = tk.Label(self.frame_left, text="FPS: 0")
+        self.fps_label.pack(pady=5)
+
         # Open the video capture
         self.cap = cv2.VideoCapture(0)
         if not self.cap.isOpened():
             print("Error: Could not open video capture.")
             self.root.quit()
 
-        # Create sliders for exposure, exposure time, and gain
+        # Create sliders and entries for exposure, exposure time, and gain
         self.exposure_slider = tk.Scale(self.frame_left, from_=-13, to_=0, orient=tk.HORIZONTAL, label="Exposure", command=self.update_exposure)
         self.exposure_slider.pack(pady=10)
 
-        self.exposure_time_slider = tk.Scale(self.frame_left, from_=1, to_=10000, orient=tk.HORIZONTAL, label="Exposure Time (µs)", command=self.update_exposure_time)
-        self.exposure_time_slider.pack(pady=10)
+        self.exposure_time_label = tk.Label(self.frame_left, text="Exposure Time (ms)")
+        self.exposure_time_label.pack(pady=5)
+        self.exposure_time_entry = tk.Entry(self.frame_left)
+        self.exposure_time_entry.pack(pady=5)
+        self.exposure_time_entry.bind("<Return>", self.update_exposure_time)
 
-        self.gain_slider = tk.Scale(self.frame_left, from_=0, to_=255, orient=tk.HORIZONTAL, label="Gain", command=self.update_gain)
-        self.gain_slider.pack(pady=10)
+        self.gain_label = tk.Label(self.frame_left, text="Gain")
+        self.gain_label.pack(pady=5)
+        self.gain_entry = tk.Entry(self.frame_left)
+        self.gain_entry.pack(pady=5)
+        self.gain_entry.bind("<Return>", self.update_gain)
 
         # Start the update loop
+        self.start_time = time.time()
+        self.frame_count = 0
         self.update_video()
 
     def update_video(self):
@@ -52,17 +65,36 @@ class CameraSettingsApp:
             self.video_label.config(image=photo)
             self.video_label.image = photo
 
+            # Update FPS calculation
+            self.frame_count += 1
+            elapsed_time = time.time() - self.start_time
+            if elapsed_time > 1:
+                fps = self.frame_count / elapsed_time
+                self.fps_label.config(text=f"FPS: {fps:.2f}")
+                self.start_time = time.time()
+                self.frame_count = 0
+
         # Call the update_video method again after 30 ms
         self.root.after(30, self.update_video)
 
     def update_exposure(self, value):
         self.cap.set(cv2.CAP_PROP_EXPOSURE, float(value))
 
-    def update_exposure_time(self, value):
-        self.cap.set(cv2.CAP_PROP_EXPOSURE, float(value) / 10000)
+    def update_exposure_time(self, event):
+        value = self.exposure_time_entry.get()
+        try:
+            exposure_time = float(value)
+            self.cap.set(cv2.CAP_PROP_EXPOSURE, exposure_time / 1000)  # Assuming the entry is in milliseconds
+        except ValueError:
+            print("Invalid exposure time value")
 
-    def update_gain(self, value):
-        self.cap.set(cv2.CAP_PROP_GAIN, float(value))
+    def update_gain(self, event):
+        value = self.gain_entry.get()
+        try:
+            gain = float(value)
+            self.cap.set(cv2.CAP_PROP_GAIN, gain)
+        except ValueError:
+            print("Invalid gain value")
 
     def __del__(self):
         # Release the capture when the application is closed
@@ -74,3 +106,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = CameraSettingsApp(root)
     root.mainloop()
+
