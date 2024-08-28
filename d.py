@@ -8,19 +8,15 @@ def evaluate_sharpness(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     return cv2.Laplacian(gray, cv2.CV_64F).var()
 
-def stitch_images(stitched_image, new_image):
+def stitch_images(img1, img2):
     # Convert images to grayscale
-    stitched_gray = cv2.cvtColor(stitched_image, cv2.COLOR_BGR2GRAY)
-    new_gray = cv2.cvtColor(new_image, cv2.COLOR_BGR2GRAY)
-
-    # Mask out black areas in the stitched image
-    mask = stitched_gray > 0
-    stitched_gray_masked = cv2.bitwise_and(stitched_gray, stitched_gray, mask=mask.astype(np.uint8))
+    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
     # Use SIFT to detect and compute key points and descriptors
     sift = cv2.SIFT_create()
-    kp1, des1 = sift.detectAndCompute(stitched_gray_masked, None)
-    kp2, des2 = sift.detectAndCompute(new_gray, None)
+    kp1, des1 = sift.detectAndCompute(gray1, None)
+    kp2, des2 = sift.detectAndCompute(gray2, None)
 
     # Use BFMatcher to find matches between descriptors
     bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
@@ -34,42 +30,104 @@ def stitch_images(stitched_image, new_image):
     # Compute the affine transformation matrix (translation only)
     M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
 
+    # Flip the translation (if needed)
+    M[0, 2] = -M[0, 2]  # Flip the translation along the x-axis
+    M[1, 2] = -M[1, 2]  # Flip the translation along the y-axis
+
     # Calculate the size of the stitched image canvas
-    h1, w1, _ = stitched_image.shape
-    h2, w2, _ = new_image.shape
+    h1, w1, _ = img1.shape
+    h2, w2, _ = img2.shape
 
     # Calculate the translation offsets
     translation_x = M[0, 2]
     translation_y = M[1, 2]
 
-    # Calculate the new size for the stitched image
-    stitched_w = max(w1, w2 + int(translation_x))
-    stitched_h = max(h1, h2 + int(translation_y))
+    # Determine canvas size and placement based on translation direction
+    if translation_x >= 0 and translation_y >= 0:
+        # Case 1: Moving right and down
+        stitched_w = max(w1, w2 + int(translation_x))
+        stitched_h = max(h1, h2 + int(translation_y))
+        x_offset, y_offset = 0, 0
+
+    elif translation_x < 0 and translation_y >= 0:
+        # Case 2: Moving left and down
+        stitched_w = max(w1 - int(translation_x), w2)
+        stitched_h = max(h1, h2 + int(translation_y))
+        x_offset, y_offset = abs(int(translation_x)), 0
+
+    elif translation_x >= 0 and translation_y < 0:
+        # Case 3: Moving right and up
+        stitched_w = max(w1, w2 + int(translation_x))
+        stitched_h = max(h1 - int(translation_y), h2)
+        x_offset, y_offset = 0, abs(int(translation_y))
+
+    else:
+        # Case 4: Moving left and up
+        stitched_w = max(w1 - int(translation_x), w2)
+        stitched_h = max(h1 - int(translation_y), h2)
+        x_offset, y_offset = abs(int(translation_x)), abs(int(translation_y))
 
     # Create a canvas large enough to hold both images
-    new_stitched_image = np.zeros((stitched_h, stitched_w, 3), dtype=np.uint8)
+    stitched_image = np.zeros((stitched_h, stitched_w, 3), dtype=np.uint8) * 255
 
     # Place the first image on the canvas
-    new_stitched_image[:h1, :w1] = stitched_image
+    stitched_image[y_offset:y_offset + h1, x_offset:x_offset + w1] = img1
+    cv2.imwrite("A.jpg", stitched_image)
 
     # Adjust the translation matrix to correctly align the second image
-    M[0, 2] = max(0, M[0, 2])
-    M[1, 2] = max(0, M[1, 2])
+    M[0, 2] += x_offset
+    M[1, 2] += y_offset
 
     # Warp the second image using the corrected transformation matrix
-    new_image_aligned = cv2.warpAffine(new_image, M, (stitched_w, stitched_h))
+    img2_aligned = cv2.warpAffine(img2, M, (stitched_image.shape[1], stitched_image.shape[0]))
+    cv2.imwrite("B.jpg", img2_aligned)
 
-    # Create a mask for the new image to handle black areas
-    mask_new_image = (new_image_aligned > 0).astype(np.uint8)
+    # Combine the images by overlaying the aligned second image
+    
 
-    # Combine the aligned new image with the existing stitched image
-    new_stitched_image = cv2.bitwise_and(new_stitched_image, new_stitched_image, mask=cv2.bitwise_not(mask_new_image[:, :, 0]))
-    new_stitched_image += new_image_aligned
+    img2_aligned_gray = cv2.cvtColor(img2_aligned, cv2.COLOR_BGR2GRAY)
+    mask = np.zeros_like(img2_aligned_gray, dtype=bool)
 
-    return new_stitched_image
+    if translation_x >= 0 and translation_y >= 0:
+        # Case 1: Moving right and down
+        for i in range(1, img2_aligned_gray.shape[0] - 1):
+            for j in range(1, img2_aligned_gray.shape[1] - 1):
+                pixel_value = img2_aligned_gray[i, j]
+                
+                if pixel_value > 0 and img2_aligned_gray[i - 1, j] > 0 and img2_aligned_gray[i, j - 1] > 0:
+                    mask[i, j] = True
+    elif translation_x < 0 and translation_y >= 0:
+        # Case 2: Moving left and down
+        for i in range(1, img2_aligned_gray.shape[0] - 1):
+            for j in range(1, img2_aligned_gray.shape[1] - 1):
+                pixel_value = img2_aligned_gray[i, j]
+                
+                if pixel_value > 0 and img2_aligned_gray[i - 1, j] > 0 and img2_aligned_gray[i, j + 1] > 0:
+                    mask[i, j] = True
+    elif translation_x >= 0 and translation_y < 0:
+        # Case 3: Moving right and up
+        for i in range(1, img2_aligned_gray.shape[0] - 1):
+            for j in range(1, img2_aligned_gray.shape[1] - 1):
+                pixel_value = img2_aligned_gray[i, j]
+                
+                if pixel_value > 0 and img2_aligned_gray[i + 1, j] > 0 and img2_aligned_gray[i, j - 1] > 0:
+                    mask[i, j] = True
+    else:
+        # Case 4: Moving left and up
+        for i in range(1, img2_aligned_gray.shape[0] - 1):
+            for j in range(1, img2_aligned_gray.shape[1] - 1):
+                pixel_value = img2_aligned_gray[i, j]
+                
+                if pixel_value > 0 and img2_aligned_gray[i + 1, j] > 0 and img2_aligned_gray[i, j + 1] > 0:
+                    mask[i, j] = True
+
+    stitched_image[mask] = img2_aligned[mask]
+    cv2.imwrite("C.jpg", stitched_image)
+
+    return stitched_image
 
 def capture_and_stitch():
-    global stitched_image
+    global first_capture
 
     ret, frame = cap.read()
     if ret:
@@ -77,16 +135,22 @@ def capture_and_stitch():
         sharpness = evaluate_sharpness(frame_resized)
 
         if sharpness >= float(sharpness_threshold.get()):
-            if stitched_image is None:
-                stitched_image = frame_resized
+            if first_capture is None:
+                first_capture = frame_resized
             else:
-                stitched_image = stitch_images(stitched_image, frame_resized)
+                second_capture = frame_resized
+                stitched_image = stitch_images(first_capture, second_capture)
+
+                cv2.imwrite("AA.jpg", first_capture)
+                cv2.imwrite("BB.jpg", second_capture)
 
                 # Display stitched image on the canvas
                 img = Image.fromarray(cv2.cvtColor(stitched_image, cv2.COLOR_BGR2RGB))
                 imgtk = ImageTk.PhotoImage(image=img)
                 canvas.create_image(400, 300, anchor=tk.CENTER, image=imgtk)
                 canvas.image = imgtk  # Keep a reference to avoid garbage collection
+
+# Live FEED
 
 def update_feed():
     ret, frame = cap.read()
@@ -104,9 +168,11 @@ def update_feed():
 def set_exposure(val):
     cap.set(cv2.CAP_PROP_EXPOSURE, float(val))
 
+# Live FEED
+
 def display_video_from_camera(camera_index=0, width=640, height=480):
-    global cap, stitched_image
-    stitched_image = None
+    global cap, first_capture
+    first_capture = None
 
     cap = cv2.VideoCapture(camera_index)
 
