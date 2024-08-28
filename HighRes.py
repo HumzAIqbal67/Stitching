@@ -1,3 +1,5 @@
+# Progress bar and high res pictures - no ignoring black lines.
+
 import cv2
 import numpy as np
 import os
@@ -92,6 +94,7 @@ def capture_and_stitch():
     global first_capture, first_capture_high_res, img_counter
 
     ret, frame = cap.read()
+    print(np.shape(frame))
     if ret:
         # Save the original high-resolution image
         save_image(frame, f"image_{img_counter}", resolution="high")

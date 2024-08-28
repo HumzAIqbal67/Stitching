@@ -68,7 +68,7 @@ def stitch_images(img1, img2):
         x_offset, y_offset = abs(int(translation_x)), abs(int(translation_y))
 
     # Create a canvas large enough to hold both images
-    stitched_image = np.zeros((stitched_h, stitched_w, 3), dtype=np.uint8) * 255
+    stitched_image = np.ones((stitched_h, stitched_w, 3), dtype=np.uint8) * 255
 
     # Place the first image on the canvas
     stitched_image[y_offset:y_offset + h1, x_offset:x_offset + w1] = img1
@@ -83,7 +83,6 @@ def stitch_images(img1, img2):
     cv2.imwrite("B.jpg", img2_aligned)
 
     # Combine the images by overlaying the aligned second image
-    
 
     img2_aligned_gray = cv2.cvtColor(img2_aligned, cv2.COLOR_BGR2GRAY)
     mask = np.zeros_like(img2_aligned_gray, dtype=bool)
@@ -143,6 +142,8 @@ def capture_and_stitch():
 
                 cv2.imwrite("AA.jpg", first_capture)
                 cv2.imwrite("BB.jpg", second_capture)
+
+                first_capture = stitched_image
 
                 # Display stitched image on the canvas
                 img = Image.fromarray(cv2.cvtColor(stitched_image, cv2.COLOR_BGR2RGB))
