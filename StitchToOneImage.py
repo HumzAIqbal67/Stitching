@@ -28,9 +28,9 @@ def stitch_images(img1, img2):
     dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
     # Compute the affine transformation matrix (translation only)
-    M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
+    M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts) #RANSAC is default method
 
-    # Flip the translation (if needed)
+    # Flip the translation
     M[0, 2] = -M[0, 2]  # Flip the translation along the x-axis
     M[1, 2] = -M[1, 2]  # Flip the translation along the y-axis
 
@@ -39,33 +39,33 @@ def stitch_images(img1, img2):
     h2, w2, _ = img2.shape
 
     # Calculate the translation offsets
-    translation_x = M[0, 2]
-    translation_y = M[1, 2]
+    translation_x = int(M[0, 2])
+    translation_y = int(M[1, 2])
 
     # Determine canvas size and placement based on translation direction
     if translation_x >= 0 and translation_y >= 0:
-        # Case 1: Moving right and down
-        stitched_w = max(w1, w2 + int(translation_x))
-        stitched_h = max(h1, h2 + int(translation_y))
+        # Moving right and down
+        stitched_w = max(w1, w2 + translation_x)
+        stitched_h = max(h1, h2 + translation_y)
         x_offset, y_offset = 0, 0
 
     elif translation_x < 0 and translation_y >= 0:
-        # Case 2: Moving left and down
-        stitched_w = max(w1 - int(translation_x), w2)
-        stitched_h = max(h1, h2 + int(translation_y))
-        x_offset, y_offset = abs(int(translation_x)), 0
+        # Moving left and down
+        stitched_w = max(w1 - translation_x, w2)
+        stitched_h = max(h1, h2 + translation_y)
+        x_offset, y_offset = abs(translation_x), 0
 
     elif translation_x >= 0 and translation_y < 0:
-        # Case 3: Moving right and up
-        stitched_w = max(w1, w2 + int(translation_x))
-        stitched_h = max(h1 - int(translation_y), h2)
-        x_offset, y_offset = 0, abs(int(translation_y))
+        # Moving right and up
+        stitched_w = max(w1, w2 + translation_x)
+        stitched_h = max(h1 - translation_y, h2)
+        x_offset, y_offset = 0, abs(translation_y)
 
     else:
-        # Case 4: Moving left and up
-        stitched_w = max(w1 - int(translation_x), w2)
-        stitched_h = max(h1 - int(translation_y), h2)
-        x_offset, y_offset = abs(int(translation_x)), abs(int(translation_y))
+        # Moving left and up
+        stitched_w = max(w1 - translation_x, w2)
+        stitched_h = max(h1 - translation_y, h2)
+        x_offset, y_offset = abs(translation_x), abs(int(translation_y))
 
     # Create a canvas large enough to hold both images
     stitched_image = np.zeros((stitched_h, stitched_w, 3), dtype=np.uint8) * 255
@@ -75,53 +75,64 @@ def stitch_images(img1, img2):
     cv2.imwrite("A.jpg", stitched_image)
 
     # Adjust the translation matrix to correctly align the second image
-    M[0, 2] += x_offset
-    M[1, 2] += y_offset
+    # M[0, 2] += x_offset
+    # M[1, 2] += y_offset
 
     # Warp the second image using the corrected transformation matrix
-    img2_aligned = cv2.warpAffine(img2, M, (stitched_image.shape[1], stitched_image.shape[0]))
-    cv2.imwrite("B.jpg", img2_aligned)
+    # img2_aligned = cv2.warpAffine(img2, M, (stitched_image.shape[1], stitched_image.shape[0]))
+    # stitched_image = np.zeros((max(h1, h2 + abs(translation_y)), max(w1, w2 + abs(translation_x)), 3), dtype=np.uint8)
 
-    # Combine the images by overlaying the aligned second image
+    # Place the first image on the canvas
+    # stitched_image[:h1, :w1] = img1
+
+    # Now directly place the second image based on the translation values
+    if translation_x < 0:
+        translation_x = 0
+    if translation_y < 0:
+        translation_y = 0
+    stitched_image[translation_y:translation_y+h2, translation_x:translation_x+w2] = img2
     
+    # cv2.imwrite("B.jpg", img2_aligned)
+    # Removed since no warping anymore, so pixels automatically align as needed.
+    
+    # # Combine the images by overlaying the aligned second image
+    # img2_aligned_gray = cv2.cvtColor(img2_aligned, cv2.COLOR_BGR2GRAY)
+    # mask = np.zeros_like(img2_aligned_gray, dtype=bool)
 
-    img2_aligned_gray = cv2.cvtColor(img2_aligned, cv2.COLOR_BGR2GRAY)
-    mask = np.zeros_like(img2_aligned_gray, dtype=bool)
+    # if translation_x >= 0 and translation_y >= 0:
+    #     # Case 1: Moving right and down
+    #     for i in range(1, img2_aligned_gray.shape[0] - 1):
+    #         for j in range(1, img2_aligned_gray.shape[1] - 1):
+    #             pixel_value = img2_aligned_gray[i, j]
+                
+    #             if pixel_value > 0 and img2_aligned_gray[i - 1, j] > 0 and img2_aligned_gray[i, j - 1] > 0:
+    #                 mask[i, j] = True
+    # elif translation_x < 0 and translation_y >= 0:
+    #     # Case 2: Moving left and down
+    #     for i in range(1, img2_aligned_gray.shape[0] - 1):
+    #         for j in range(1, img2_aligned_gray.shape[1] - 1):
+    #             pixel_value = img2_aligned_gray[i, j]
+                
+    #             if pixel_value > 0 and img2_aligned_gray[i - 1, j] > 0 and img2_aligned_gray[i, j + 1] > 0:
+    #                 mask[i, j] = True
+    # elif translation_x >= 0 and translation_y < 0:
+    #     # Case 3: Moving right and up
+    #     for i in range(1, img2_aligned_gray.shape[0] - 1):
+    #         for j in range(1, img2_aligned_gray.shape[1] - 1):
+    #             pixel_value = img2_aligned_gray[i, j]
+                
+    #             if pixel_value > 0 and img2_aligned_gray[i + 1, j] > 0 and img2_aligned_gray[i, j - 1] > 0:
+    #                 mask[i, j] = True
+    # else:
+    #     # Case 4: Moving left and up
+    #     for i in range(1, img2_aligned_gray.shape[0] - 1):
+    #         for j in range(1, img2_aligned_gray.shape[1] - 1):
+    #             pixel_value = img2_aligned_gray[i, j]
+                
+    #             if pixel_value > 0 and img2_aligned_gray[i + 1, j] > 0 and img2_aligned_gray[i, j + 1] > 0:
+    #                 mask[i, j] = True
 
-    if translation_x >= 0 and translation_y >= 0:
-        # Case 1: Moving right and down
-        for i in range(1, img2_aligned_gray.shape[0] - 1):
-            for j in range(1, img2_aligned_gray.shape[1] - 1):
-                pixel_value = img2_aligned_gray[i, j]
-                
-                if pixel_value > 0 and img2_aligned_gray[i - 1, j] > 0 and img2_aligned_gray[i, j - 1] > 0:
-                    mask[i, j] = True
-    elif translation_x < 0 and translation_y >= 0:
-        # Case 2: Moving left and down
-        for i in range(1, img2_aligned_gray.shape[0] - 1):
-            for j in range(1, img2_aligned_gray.shape[1] - 1):
-                pixel_value = img2_aligned_gray[i, j]
-                
-                if pixel_value > 0 and img2_aligned_gray[i - 1, j] > 0 and img2_aligned_gray[i, j + 1] > 0:
-                    mask[i, j] = True
-    elif translation_x >= 0 and translation_y < 0:
-        # Case 3: Moving right and up
-        for i in range(1, img2_aligned_gray.shape[0] - 1):
-            for j in range(1, img2_aligned_gray.shape[1] - 1):
-                pixel_value = img2_aligned_gray[i, j]
-                
-                if pixel_value > 0 and img2_aligned_gray[i + 1, j] > 0 and img2_aligned_gray[i, j - 1] > 0:
-                    mask[i, j] = True
-    else:
-        # Case 4: Moving left and up
-        for i in range(1, img2_aligned_gray.shape[0] - 1):
-            for j in range(1, img2_aligned_gray.shape[1] - 1):
-                pixel_value = img2_aligned_gray[i, j]
-                
-                if pixel_value > 0 and img2_aligned_gray[i + 1, j] > 0 and img2_aligned_gray[i, j + 1] > 0:
-                    mask[i, j] = True
-
-    stitched_image[mask] = img2_aligned[mask]
+    # stitched_image[mask] = img2_aligned[mask]
     cv2.imwrite("C.jpg", stitched_image)
 
     return stitched_image
