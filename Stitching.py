@@ -8,29 +8,49 @@ def evaluate_sharpness(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     return cv2.Laplacian(gray, cv2.CV_64F).var()
 
-def stitch_images(img1, img2):
-    # Convert images to grayscale
+def stitch_images(img1, img2, str):
     gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
     gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
 
+    print(np.shape(gray1))
+
     # Use SIFT to detect and compute key points and descriptors
     sift = cv2.SIFT_create()
-    kp1, des1 = sift.detectAndCompute(gray1, None)
-    kp2, des2 = sift.detectAndCompute(gray2, None)
+    scale_factor = 0.25
+    kp1_full = []
+    kp2_full = []
+    if str == "r":
+        kp1, des1 = sift.detectAndCompute(gray1, None)
+        kp2, des2 = sift.detectAndCompute(gray2, None)
+        kp1_full = kp1
+        kp2_full = kp2
+    else: # scale down highres image
+        resize1 = cv2.resize(gray1, (0, 0), fx=scale_factor, fy=scale_factor)
+        resize2 = cv2.resize(gray2, (0, 0), fx=scale_factor, fy=scale_factor)
+        kp1, des1 = sift.detectAndCompute(resize1, None)
+        kp2, des2 = sift.detectAndCompute(resize2, None)
+        for kp in kp1:
+            kp1_full.append(cv2.KeyPoint(kp.pt[0] / scale_factor, kp.pt[1] / scale_factor, kp.size / scale_factor, kp.angle, kp.response, kp.octave, kp.class_id))
+        
+        for kp in kp2:
+            kp2_full.append(cv2.KeyPoint(kp.pt[0] / scale_factor, kp.pt[1] / scale_factor, kp.size / scale_factor, kp.angle, kp.response, kp.octave, kp.class_id))
 
-    # Use BFMatcher to find matches between descriptors
+    print("Img1 Size: ", np.shape(gray1), "New Size: ", np.shape(gray1), "key points size: ", np.shape(kp1_full), "Descriptors size: ", np.shape(des1))
+    print("Img2 Size: ", np.shape(gray2), "key points size: ", np.shape(kp2_full), "Descriptors size: ", np.shape(des2))
+
+    # Find matches between descriptors
     bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
     matches = bf.match(des1, des2)
     matches = sorted(matches, key=lambda x: x.distance)
 
-    # Extract locations of matched keypoints
-    src_pts = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-    dst_pts = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+    print("Matches: ", np.shape("matches"))
 
-    # Compute the affine transformation matrix (translation only)
-    M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts)
+    # Extract locations of matched keypoints & Compute the affine transformation matrix (translation only)
+    src_pts = np.float32([kp1_full[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2_full[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+    M, _ = cv2.estimateAffinePartial2D(src_pts, dst_pts) #RANSAC is default method
 
-    # Flip the translation (if needed)
+    # Flip the translation
     M[0, 2] = -M[0, 2]  # Flip the translation along the x-axis
     M[1, 2] = -M[1, 2]  # Flip the translation along the y-axis
 
@@ -39,123 +59,85 @@ def stitch_images(img1, img2):
     h2, w2, _ = img2.shape
 
     # Calculate the translation offsets
-    translation_x = M[0, 2]
-    translation_y = M[1, 2]
+    translation_x = int(M[0, 2])
+    translation_y = int(M[1, 2])
 
     # Determine canvas size and placement based on translation direction
     if translation_x >= 0 and translation_y >= 0:
-        # Case 1: Moving right and down
-        stitched_w = max(w1, w2 + int(translation_x))
-        stitched_h = max(h1, h2 + int(translation_y))
+        # Moving right and down
+        stitched_w = max(w1, w2 + translation_x)
+        stitched_h = max(h1, h2 + translation_y)
         x_offset, y_offset = 0, 0
 
     elif translation_x < 0 and translation_y >= 0:
-        # Case 2: Moving left and down
-        stitched_w = max(w1 - int(translation_x), w2)
-        stitched_h = max(h1, h2 + int(translation_y))
-        x_offset, y_offset = abs(int(translation_x)), 0
+        # Moving left and down
+        stitched_w = max(w1 - translation_x, w2)
+        stitched_h = max(h1, h2 + translation_y)
+        x_offset, y_offset = abs(translation_x), 0
 
     elif translation_x >= 0 and translation_y < 0:
-        # Case 3: Moving right and up
-        stitched_w = max(w1, w2 + int(translation_x))
-        stitched_h = max(h1 - int(translation_y), h2)
-        x_offset, y_offset = 0, abs(int(translation_y))
+        # Moving right and up
+        stitched_w = max(w1, w2 + translation_x)
+        stitched_h = max(h1 - translation_y, h2)
+        x_offset, y_offset = 0, abs(translation_y)
 
     else:
-        # Case 4: Moving left and up
-        stitched_w = max(w1 - int(translation_x), w2)
-        stitched_h = max(h1 - int(translation_y), h2)
-        x_offset, y_offset = abs(int(translation_x)), abs(int(translation_y))
+        # Moving left and up
+        stitched_w = max(w1 - translation_x, w2)
+        stitched_h = max(h1 - translation_y, h2)
+        x_offset, y_offset = abs(translation_x), abs(int(translation_y))
 
     # Create a canvas large enough to hold both images
-    stitched_image = np.ones((stitched_h, stitched_w, 3), dtype=np.uint8) * 255
+    stitched_image = np.zeros((stitched_h, stitched_w, 3), dtype=np.uint8) * 255
 
     # Place the first image on the canvas
     stitched_image[y_offset:y_offset + h1, x_offset:x_offset + w1] = img1
-    cv2.imwrite("A.jpg", stitched_image)
 
-    # Adjust the translation matrix to correctly align the second image
-    M[0, 2] += x_offset
-    M[1, 2] += y_offset
-
-    # Warp the second image using the corrected transformation matrix
-    img2_aligned = cv2.warpAffine(img2, M, (stitched_image.shape[1], stitched_image.shape[0]))
-    cv2.imwrite("B.jpg", img2_aligned)
-
-    # Combine the images by overlaying the aligned second image
-
-    img2_aligned_gray = cv2.cvtColor(img2_aligned, cv2.COLOR_BGR2GRAY)
-    mask = np.zeros_like(img2_aligned_gray, dtype=bool)
-
-    if translation_x >= 0 and translation_y >= 0:
-        # Case 1: Moving right and down
-        for i in range(1, img2_aligned_gray.shape[0] - 1):
-            for j in range(1, img2_aligned_gray.shape[1] - 1):
-                pixel_value = img2_aligned_gray[i, j]
-                
-                if pixel_value > 0 and img2_aligned_gray[i - 1, j] > 0 and img2_aligned_gray[i, j - 1] > 0:
-                    mask[i, j] = True
-    elif translation_x < 0 and translation_y >= 0:
-        # Case 2: Moving left and down
-        for i in range(1, img2_aligned_gray.shape[0] - 1):
-            for j in range(1, img2_aligned_gray.shape[1] - 1):
-                pixel_value = img2_aligned_gray[i, j]
-                
-                if pixel_value > 0 and img2_aligned_gray[i - 1, j] > 0 and img2_aligned_gray[i, j + 1] > 0:
-                    mask[i, j] = True
-    elif translation_x >= 0 and translation_y < 0:
-        # Case 3: Moving right and up
-        for i in range(1, img2_aligned_gray.shape[0] - 1):
-            for j in range(1, img2_aligned_gray.shape[1] - 1):
-                pixel_value = img2_aligned_gray[i, j]
-                
-                if pixel_value > 0 and img2_aligned_gray[i + 1, j] > 0 and img2_aligned_gray[i, j - 1] > 0:
-                    mask[i, j] = True
-    else:
-        # Case 4: Moving left and up
-        for i in range(1, img2_aligned_gray.shape[0] - 1):
-            for j in range(1, img2_aligned_gray.shape[1] - 1):
-                pixel_value = img2_aligned_gray[i, j]
-                
-                if pixel_value > 0 and img2_aligned_gray[i + 1, j] > 0 and img2_aligned_gray[i, j + 1] > 0:
-                    mask[i, j] = True
-
-    stitched_image[mask] = img2_aligned[mask]
-    cv2.imwrite("C.jpg", stitched_image)
+    # Now directly place the second image based on the translation values
+    if translation_x < 0:
+        translation_x = 0
+    if translation_y < 0:
+        translation_y = 0
+    stitched_image[translation_y:translation_y+h2, translation_x:translation_x+w2] = img2
 
     return stitched_image
 
 def capture_and_stitch():
-    global first_capture
+    global first_capture, first_highres
 
     ret, frame = cap.read()
-
-    print(np.shape(frame))
-
-    print(frame)
     if ret:
+        originalFrame = frame
         frame_resized = cv2.resize(frame, (320, 240))
         sharpness = evaluate_sharpness(frame_resized)
 
         if sharpness >= float(sharpness_threshold.get()):
             if first_capture is None:
+                first_highres = originalFrame
                 first_capture = frame_resized
             else:
+                second_highres = originalFrame
                 second_capture = frame_resized
-                stitched_image = stitch_images(first_capture, second_capture)
+                stitched_imageR = stitch_images(first_capture, second_capture, "r")
+                cv2.imwrite("firstimgresized.jpg", first_capture)
+                cv2.imwrite("scndimgresized.jpg", second_capture)
 
-                cv2.imwrite("AA.jpg", first_capture)
-                cv2.imwrite("BB.jpg", second_capture)
+                cv2.imwrite("stichresize.jpg", stitched_imageR)
 
-                first_capture = stitched_image
+                stitched_imageH = stitch_images(first_highres, second_highres, "h")
+                cv2.imwrite("firstimghighres.jpg", first_highres)
+                cv2.imwrite("scndimghighres.jpg", second_highres)
+
+                cv2.imwrite("stitchhighres.jpg", stitched_imageH)
+
+                first_highres = stitched_imageH
+                first_capture = stitched_imageR
 
                 # Display stitched image on the canvas
-                img = Image.fromarray(cv2.cvtColor(stitched_image, cv2.COLOR_BGR2RGB))
+                img = Image.fromarray(cv2.cvtColor(stitched_imageR, cv2.COLOR_BGR2RGB))
                 imgtk = ImageTk.PhotoImage(image=img)
                 canvas.create_image(400, 300, anchor=tk.CENTER, image=imgtk)
                 canvas.image = imgtk  # Keep a reference to avoid garbage collection
-
-# Live FEED
 
 def update_feed():
     ret, frame = cap.read()
@@ -172,8 +154,6 @@ def update_feed():
 
 def set_exposure(val):
     cap.set(cv2.CAP_PROP_EXPOSURE, float(val))
-
-# Live FEED
 
 def display_video_from_camera(camera_index=0, width=640, height=480):
     global cap, first_capture
@@ -240,8 +220,3 @@ if __name__ == "__main__":
         print("Invalid input. Please enter an integer.")
     else:
         display_video_from_camera(camera_index, width=320, height=240)
-
-
-# Histogram for brightness
-
-# led light 
