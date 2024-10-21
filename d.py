@@ -129,6 +129,10 @@ def capture_and_stitch():
     global first_capture
 
     ret, frame = cap.read()
+
+    print(np.shape(frame))
+
+    print(frame)
     if ret:
         frame_resized = cv2.resize(frame, (320, 240))
         sharpness = evaluate_sharpness(frame_resized)
@@ -236,3 +240,8 @@ if __name__ == "__main__":
         print("Invalid input. Please enter an integer.")
     else:
         display_video_from_camera(camera_index, width=320, height=240)
+
+
+# Histogram for brightness
+
+# led light 
