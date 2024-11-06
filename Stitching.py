@@ -6,6 +6,8 @@ from tkinter import ttk
 from tkinter import Scale, Label, Entry, Button
 from PIL import Image, ImageTk
 
+stitch_lock = threading.Lock()
+
 def evaluate_sharpness(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     return cv2.Laplacian(gray, cv2.CV_64F).var()
@@ -104,8 +106,29 @@ def stitch_images(img1, img2, str):
 
     return stitched_image
 
+def background_stitch_highres(second_highres):
+    global first_highres, highres_image_count
+
+    # Acquire the lock to ensure only one thread can stitch at a time
+    with stitch_lock:
+        global lowres_image_count
+        if first_highres is None:
+            first_highres = second_highres  # Start with the first high-res image
+            return
+
+        # Perform high-resolution stitching
+        stitched_imageH = stitch_images(first_highres, second_highres, "h")
+        cv2.imwrite("stitchhighres.jpg", stitched_imageH)
+        first_highres = stitched_imageH
+
+        # Update progress count and progress bar & label
+        highres_image_count += 1
+        progress_var.set((highres_image_count / lowres_image_count) * 100)
+        progress_label.config(text=f"{highres_image_count} images stiched out of {lowres_image_count} total images")
+
+
 def capture_and_stitch():
-    global first_capture, first_highres
+    global first_capture, first_highres, lowres_image_count, highres_image_count
 
     ret, frame = cap.read()
     if ret:
@@ -115,6 +138,7 @@ def capture_and_stitch():
         if first_capture is None:
             first_highres = originalFrame
             first_capture = frame_resized
+            lowres_image_count = 1  # Initial count for progress
             img = Image.fromarray(cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB))
             imgtk = ImageTk.PhotoImage(image=img)
             canvas.create_image(400, 300, anchor=tk.CENTER, image=imgtk)
@@ -124,25 +148,20 @@ def capture_and_stitch():
             second_highres = originalFrame
             second_capture = frame_resized
             stitched_imageR = stitch_images(first_capture, second_capture, "r")
-            # cv2.imwrite("firstimgresized.jpg", first_capture)
-            # cv2.imwrite("scndimgresized.jpg", second_capture)
 
+            # Save or display low-resolution stitch
             cv2.imwrite("stichresize.jpg", stitched_imageR)
-
-            stitched_imageH = stitch_images(first_highres, second_highres, "h")
-            # cv2.imwrite("firstimghighres.jpg", first_highres)
-            # cv2.imwrite("scndimghighres.jpg", second_highres)
-
-            cv2.imwrite("stitchhighres.jpg", stitched_imageH)
-
-            first_highres = stitched_imageH
             first_capture = stitched_imageR
+            lowres_image_count += 1  # Update the count for low-res images
 
-            # Display stitched image on the canvas
+            # Display stitched low-res image on the canvas
             img = Image.fromarray(cv2.cvtColor(stitched_imageR, cv2.COLOR_BGR2RGB))
             imgtk = ImageTk.PhotoImage(image=img)
             canvas.create_image(400, 300, anchor=tk.CENTER, image=imgtk)
-            canvas.image = imgtk  # Keep a reference to avoid garbage collection
+            canvas.image = imgtk
+
+            # Start a new thread for high-resolution stitching
+            threading.Thread(target=background_stitch_highres, args=(second_highres,)).start()
 
 def update_feed():
     ret, frame = cap.read()
@@ -161,8 +180,10 @@ def set_exposure(val):
     cap.set(cv2.CAP_PROP_EXPOSURE, float(val))
 
 def display_video_from_camera(camera_index=0, width=640, height=480):
-    global cap, first_capture
+    global cap, first_capture, progress_var, progress_label, lowres_image_count, highres_image_count
     first_capture = None
+    lowres_image_count = 0
+    highres_image_count = 1
 
     cap = cv2.VideoCapture(camera_index)
 
@@ -205,6 +226,16 @@ def display_video_from_camera(camera_index=0, width=640, height=480):
 
     capture_button = Button(settings_frame, text="Capture and Stitch", command=capture_and_stitch)
     capture_button.pack(pady=5)
+
+    progress_label = Label(settings_frame, text="0 images stiched out of 0 total images")
+    progress_label.pack(pady=5)
+
+    # Progress bar for high-res stitching
+    progress_var = tk.DoubleVar()
+    progress_bar = ttk.Progressbar(settings_frame, variable=progress_var, maximum=100)
+    progress_bar.pack(pady=10)
+
+    # Bind the "Pause" key to the capture_and_stitch function
     root.bind("p", lambda event: capture_and_stitch())
 
     update_feed()
