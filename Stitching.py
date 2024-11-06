@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
+import threading
 import tkinter as tk
+from tkinter import ttk
 from tkinter import Scale, Label, Entry, Button
 from PIL import Image, ImageTk
 
@@ -109,35 +111,38 @@ def capture_and_stitch():
     if ret:
         originalFrame = frame
         frame_resized = cv2.resize(frame, (320, 240))
-        sharpness = evaluate_sharpness(frame_resized)
 
-        if sharpness >= float(sharpness_threshold.get()):
-            if first_capture is None:
-                first_highres = originalFrame
-                first_capture = frame_resized
-            else:
-                second_highres = originalFrame
-                second_capture = frame_resized
-                stitched_imageR = stitch_images(first_capture, second_capture, "r")
-                cv2.imwrite("firstimgresized.jpg", first_capture)
-                cv2.imwrite("scndimgresized.jpg", second_capture)
+        if first_capture is None:
+            first_highres = originalFrame
+            first_capture = frame_resized
+            img = Image.fromarray(cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB))
+            imgtk = ImageTk.PhotoImage(image=img)
+            canvas.create_image(400, 300, anchor=tk.CENTER, image=imgtk)
+            canvas.image = imgtk  # Keep a reference to avoid garbage collection
 
-                cv2.imwrite("stichresize.jpg", stitched_imageR)
+        else:
+            second_highres = originalFrame
+            second_capture = frame_resized
+            stitched_imageR = stitch_images(first_capture, second_capture, "r")
+            # cv2.imwrite("firstimgresized.jpg", first_capture)
+            # cv2.imwrite("scndimgresized.jpg", second_capture)
 
-                stitched_imageH = stitch_images(first_highres, second_highres, "h")
-                cv2.imwrite("firstimghighres.jpg", first_highres)
-                cv2.imwrite("scndimghighres.jpg", second_highres)
+            cv2.imwrite("stichresize.jpg", stitched_imageR)
 
-                cv2.imwrite("stitchhighres.jpg", stitched_imageH)
+            stitched_imageH = stitch_images(first_highres, second_highres, "h")
+            # cv2.imwrite("firstimghighres.jpg", first_highres)
+            # cv2.imwrite("scndimghighres.jpg", second_highres)
 
-                first_highres = stitched_imageH
-                first_capture = stitched_imageR
+            cv2.imwrite("stitchhighres.jpg", stitched_imageH)
 
-                # Display stitched image on the canvas
-                img = Image.fromarray(cv2.cvtColor(stitched_imageR, cv2.COLOR_BGR2RGB))
-                imgtk = ImageTk.PhotoImage(image=img)
-                canvas.create_image(400, 300, anchor=tk.CENTER, image=imgtk)
-                canvas.image = imgtk  # Keep a reference to avoid garbage collection
+            first_highres = stitched_imageH
+            first_capture = stitched_imageR
+
+            # Display stitched image on the canvas
+            img = Image.fromarray(cv2.cvtColor(stitched_imageR, cv2.COLOR_BGR2RGB))
+            imgtk = ImageTk.PhotoImage(image=img)
+            canvas.create_image(400, 300, anchor=tk.CENTER, image=imgtk)
+            canvas.image = imgtk  # Keep a reference to avoid garbage collection
 
 def update_feed():
     ret, frame = cap.read()
@@ -193,18 +198,14 @@ def display_video_from_camera(camera_index=0, width=640, height=480):
     sharpness_label = Label(settings_frame, text="Sharpness: 0.00")
     sharpness_label.pack(pady=5)
 
-    Label(settings_frame, text="Sharpness Threshold:").pack(pady=5)
-    sharpness_threshold = Entry(settings_frame)
-    sharpness_threshold.pack(pady=5)
-    sharpness_threshold.insert(0, "100.0")
-
-    exposure_slider = Scale(settings_frame, from_=0, to_=255, orient=tk.HORIZONTAL, label="Exposure")
+    exposure_slider = Scale(settings_frame, from_=13, to_=0, orient=tk.HORIZONTAL, label="Exposure")
     exposure_slider.pack(pady=5)
-    exposure_slider.set(100)
-    exposure_slider.bind("<Motion>", lambda event: set_exposure(exposure_slider.get()))
+    exposure_slider.set(7)
+    exposure_slider.bind("<Motion>", lambda event: set_exposure(-exposure_slider.get()))
 
     capture_button = Button(settings_frame, text="Capture and Stitch", command=capture_and_stitch)
     capture_button.pack(pady=5)
+    root.bind("p", lambda event: capture_and_stitch())
 
     update_feed()
 
