@@ -8,6 +8,18 @@ from PIL import Image, ImageTk
 
 stitch_lock = threading.Lock()
 
+# Variables for History
+first_capture = None
+first_highres = None  # Ensure first_highres is defined initially
+prev_first_capture = None
+prev_first_highres = None
+is_aborted = False  # Flag to signal thread abortion
+
+# Variables to keep track of latest thread
+latest_thread = None
+latest_abort_flag = {}
+# undo_requested = False # for tracking if undo is called during thread run. second last thread endge case
+
 def evaluate_sharpness(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     return cv2.Laplacian(gray, cv2.CV_64F).var()
@@ -106,29 +118,42 @@ def stitch_images(img1, img2, str):
 
     return stitched_image
 
-def background_stitch_highres(second_highres):
-    global first_highres, highres_image_count
+def background_stitch_highres(second_highres, abort_flag):
+    global first_highres, highres_image_count, is_aborted, lowres_image_count, prev_first_highres
 
     # Acquire the lock to ensure only one thread can stitch at a time
     with stitch_lock:
-        global lowres_image_count
+        if abort_flag['abort']:
+            print("ABORTED")
+            return
+        
+        prev_first_highres = first_highres # move before abort
+        
         if first_highres is None:
-            first_highres = second_highres  # Start with the first high-res image
+            first_highres = second_highres  # Idk if i need this
             return
 
         # Perform high-resolution stitching
         stitched_imageH = stitch_images(first_highres, second_highres, "h")
         cv2.imwrite("stitchhighres.jpg", stitched_imageH)
         first_highres = stitched_imageH
+        print("set")
 
         # Update progress count and progress bar & label
         highres_image_count += 1
         progress_var.set((highres_image_count / lowres_image_count) * 100)
-        progress_label.config(text=f"{highres_image_count} images stiched out of {lowres_image_count} total images")
+        progress_label.config(text=f"High-Res Images Stitched: {highres_image_count} / {lowres_image_count}")
 
 
 def capture_and_stitch():
     global first_capture, first_highres, lowres_image_count, highres_image_count
+    global prev_first_capture, prev_first_highres, is_aborted
+    global latest_abort_flag
+
+    # Store the current images in the history
+    prev_first_capture = first_capture
+    prev_first_highres = first_highres # this is old
+    is_aborted = False  # Reset abort flag
 
     ret, frame = cap.read()
     if ret:
@@ -150,7 +175,7 @@ def capture_and_stitch():
             stitched_imageR = stitch_images(first_capture, second_capture, "r")
 
             # Save or display low-resolution stitch
-            cv2.imwrite("stichresize.jpg", stitched_imageR)
+            cv2.imwrite("stitchresize.jpg", stitched_imageR)
             first_capture = stitched_imageR
             lowres_image_count += 1  # Update the count for low-res images
 
@@ -161,7 +186,41 @@ def capture_and_stitch():
             canvas.image = imgtk
 
             # Start a new thread for high-resolution stitching
-            threading.Thread(target=background_stitch_highres, args=(second_highres,)).start()
+            # Set up a new abort flag for the current thread
+            latest_abort_flag = {'abort': False}
+            latest_thread = threading.Thread(target=background_stitch_highres, args=(second_highres, latest_abort_flag))
+            latest_thread.start()
+
+def undo_stitch():
+    global first_capture, first_highres, lowres_image_count, highres_image_count, is_aborted
+    global prev_first_capture, prev_first_highres
+    global latest_abort_flag, undo_requested
+
+    undo_requested = True
+
+    # Abort the latest high-res stitching thread by setting the flag
+    latest_abort_flag['abort'] = True
+
+    # Revert to the previous images
+    if prev_first_capture is not None and prev_first_highres is not None:
+        first_capture = prev_first_capture
+        first_highres = prev_first_highres
+
+        # Update the progress variables accordingly
+        lowres_image_count -= 1
+        if highres_image_count > lowres_image_count:
+            highres_image_count -= 1
+        progress_var.set((highres_image_count / lowres_image_count) * 100 if lowres_image_count > 0 else 0)
+        progress_label.config(text=f"High-Res Images Stitched: {highres_image_count} / {lowres_image_count}")
+
+        # Update the displayed low-res image on the canvas
+        cv2.imwrite("stitchresize.jpg", prev_first_capture)
+        cv2.imwrite("stitchhighres.jpg", prev_first_highres)
+        img = Image.fromarray(cv2.cvtColor(first_capture, cv2.COLOR_BGR2RGB))
+        imgtk = ImageTk.PhotoImage(image=img)
+        canvas.create_image(400, 300, anchor=tk.CENTER, image=imgtk)
+        canvas.image = imgtk  # Keep a reference to avoid garbage collection
+    undo_requested = False
 
 def update_feed():
     ret, frame = cap.read()
@@ -227,7 +286,10 @@ def display_video_from_camera(camera_index=0, width=640, height=480):
     capture_button = Button(settings_frame, text="Capture and Stitch", command=capture_and_stitch)
     capture_button.pack(pady=5)
 
-    progress_label = Label(settings_frame, text="0 images stiched out of 0 total images")
+    undo_button = Button(settings_frame, text="Undo", command=undo_stitch)
+    undo_button.pack(pady=5)
+
+    progress_label = Label(settings_frame, text="High-Res Images Stitched: 0 / 0")
     progress_label.pack(pady=5)
 
     # Progress bar for high-res stitching
